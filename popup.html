@@ -185,6 +185,41 @@
         .cancel-btn:hover {
             background: #da190b;
         }
+
+        .support-section {
+            margin-top: 15px;
+            text-align: center;
+            padding: 15px;
+            background: linear-gradient(135deg, #ffeb3b, #ff9800);
+            border-radius: 8px;
+            border: 2px solid #ffc107;
+        }
+
+        .support-btn {
+            width: 100%;
+            padding: 10px;
+            background: linear-gradient(135deg, #6f4e37, #8b4513);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-bottom: 5px;
+        }
+
+        .support-btn:hover {
+            background: linear-gradient(135deg, #5d4037, #6d4c41);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+
+        .support-text {
+            font-size: 11px;
+            color: #8b4513;
+            font-weight: 500;
+        }
     </style>
 </head>
 
@@ -198,60 +233,21 @@
         🎬 Get Random Video
     </button>
 
-    <button id="settingsBtn" class="settings-btn">
-        ⚙️ Filters
-    </button>
-
     <div id="status" class="status" style="display: none;"></div>
-
-    <!-- Settings Panel (hidden by default) -->
-    <div id="settingsPanel" class="settings-panel" style="display: none;">
-        <h3>Smart Filters</h3>
-
-        <div class="filter-group">
-            <label class="filter-label">
-                <input type="checkbox" id="filterShorts">
-                🚫 No YouTube Shorts (< 1min) </label>
-        </div>
-
-        <div class="filter-group">
-            <label class="filter-label">
-                <input type="checkbox" id="filterLiveStreams">
-                🔴 No Live Streams
-            </label>
-        </div>
-
-        <div class="filter-group">
-            <label class="filter-label">Duration range:</label>
-            <div class="range-inputs">
-                <input type="number" id="minDuration" min="0" max="300" placeholder="Min (min)">
-                <span>to</span>
-                <input type="number" id="maxDuration" min="1" max="1000" placeholder="Max (min)">
-            </div>
-        </div>
-
-        <div class="filter-group">
-            <label class="filter-label">
-                <input type="checkbox" id="filterRecentlyWatched">
-                🕐 Avoid recently watched (7 days)
-            </label>
-        </div>
-
-        <div class="filter-group">
-            <label class="filter-label">
-                <input type="checkbox" id="filterLowViews">
-                📈 Skip low-view videos (< 1K views) </label>
-        </div>
-
-        <div class="settings-actions">
-            <button id="saveSettings" class="save-btn">Save</button>
-            <button id="cancelSettings" class="cancel-btn">Cancel</button>
-        </div>
-    </div>
 
     <div class="stats">
         <div>Videos discovered: <span id="videoCount">0</span></div>
         <div>Last used: <span id="lastUsed">Never</span></div>
+    </div>
+
+    <!-- Support Developer Section -->
+    <div class="support-section">
+        <button id="supportBtn" class="support-btn">
+            ☕ Buy me a coffee
+        </button>
+        <div class="support-text">
+            Love this extension? Support its development!
+        </div>
     </div>
 
     <script src="popup.js"></script>

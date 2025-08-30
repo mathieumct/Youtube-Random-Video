@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "YouTube Random Video",
     "version": "1.0.1",
-    "description": "Randomly pick a video from your YouTube feed with smart filters",
+    "description": "Randomly pick a video from your YouTube feed",
     "permissions": [
         "activeTab",
         "storage",
@@ -11,9 +11,18 @@
     "host_permissions": [
         "*://*.youtube.com/*"
     ],
+    "icons": {
+        "16": "icons/icon16.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+    },
     "action": {
         "default_popup": "popup.html",
-        "default_title": "Get random YouTube video"
+        "default_title": "Get random YouTube video",
+        "default_icon": {
+            "16": "icons/icon16.png",
+            "48": "icons/icon48.png"
+        }
     },
     "content_scripts": [
         {
