@@ -1,349 +1,711 @@
-// popup.js - Interface logic
+// popup.js - Version clean et sécurisée
 document.addEventListener('DOMContentLoaded', async () => {
+    // DOM Elements
     const randomBtn = document.getElementById('randomBtn');
     const status = document.getElementById('status');
-  const videoCount = document.getElementById('videoCount');
-  const lastUsed = document.getElementById('lastUsed');
-  const settingsBtn = document.getElementById('settingsBtn');
-  const settingsPanel = document.getElementById('settingsPanel');
-  const saveSettings = document.getElementById('saveSettings');
-  const cancelSettings = document.getElementById('cancelSettings');
+    const videoCount = document.getElementById('videoCount');
+    const lastUsed = document.getElementById('lastUsed');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const settingsPanel = document.getElementById('settingsPanel');
+    const saveSettings = document.getElementById('saveSettings');
+    const cancelSettings = document.getElementById('cancelSettings');
 
-  // Load saved stats when popup opens
-  await loadStats();
-  await loadSettings();    // Main button click handler
-  randomBtn.addEventListener('click', async () => {
-    try {
-      await getRandomVideo();
-    } catch (error) {
-      console.error('Error getting random video:', error);
-      showStatus('error', `Error: ${error.message}`);
-    }
-  });
-
-  // Settings panel toggle
-  settingsBtn.addEventListener('click', () => {
-    const isHidden = settingsPanel.style.display === 'none';
-    settingsPanel.style.display = isHidden ? 'block' : 'none';
-    settingsBtn.textContent = isHidden ? '⚙️ Hide Filters' : '⚙️ Filters';
-  });
-
-  // Save settings
-  saveSettings.addEventListener('click', async () => {
-    await saveSettingsData();
-    settingsPanel.style.display = 'none';
-    settingsBtn.textContent = '⚙️ Filters';
-    showStatus('success', '✅ Settings saved!');
-  });
-
-  // Cancel settings
-  cancelSettings.addEventListener('click', () => {
-    loadSettings(); // Reset to saved values
-    settingsPanel.style.display = 'none';
-    settingsBtn.textContent = '⚙️ Filters';
-  });    async function getRandomVideo() {
-        showStatus('loading', '🔍 Looking for videos...');
-        randomBtn.disabled = true;
-
+    // Security & Validation Functions
+    function isValidYouTubeUrl(url) {
         try {
-            // Get current active tab
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-            // Always go to YouTube homepage to get fresh videos
-            showStatus('loading', '📺 Loading fresh videos from YouTube...');
-            await chrome.tabs.update(tab.id, { url: 'https://www.youtube.com' });
+            if (!url || typeof url !== 'string') return false;
             
-            // Wait for page to load
-            await sleep(3000);
-
-            // Inject and execute the scraping script
-            showStatus('loading', '🎬 Finding videos on page...');
-
-            const results = await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                func: scrapeYouTubeHomePage,
-            });
-
-            const videos = results[0].result;
-
-            if (!videos || videos.length === 0) {
-                throw new Error('No videos found on this page. Try going to YouTube homepage first!');
-            }
-
-            // Apply filters to videos
-            const filteredVideos = await applyFilters(videos);
+            const parsedUrl = new URL(url);
+            const validDomains = ['www.youtube.com', 'youtube.com', 'm.youtube.com'];
             
-            if (filteredVideos.length === 0) {
-                throw new Error('No videos match your filters. Try adjusting your settings!');
-            }
-
-            // Avoid recently selected videos
-            const recentVideos = await getRecentVideos();
-            const availableVideos = filteredVideos.filter(video => 
-                !recentVideos.some(recent => recent.url === video.url)
-            );
+            if (!validDomains.includes(parsedUrl.hostname)) return false;
+            if (parsedUrl.protocol !== 'https:') return false;
+            if (!parsedUrl.pathname.startsWith('/watch')) return false;
             
-            // If all videos were recently watched, use all filtered videos
-            const videosToChooseFrom = availableVideos.length > 0 ? availableVideos : filteredVideos;
-            
-            // Pick random video from available videos
-            const randomVideo = videosToChooseFrom[Math.floor(Math.random() * videosToChooseFrom.length)];
-            
-            // Save this video to recent list
-            await saveRecentVideo(randomVideo);
-
-            showStatus('loading', `🎬 Opening: ${randomVideo.title.substring(0, 30)}...`);
-
-            // Navigate to the video
-            await chrome.tabs.update(tab.id, { url: randomVideo.url });
-
-            // Update stats
-            await updateStats(filteredVideos.length);
-
-            showStatus('success', `✅ Enjoy your random video!`);
-
-            // Close popup after success
-            setTimeout(() => window.close(), 1500);
-
+            const videoId = parsedUrl.searchParams.get('v');
+            return videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId);
         } catch (error) {
-            throw error;
-        } finally {
-            randomBtn.disabled = false;
+            console.error('URL validation error:', error);
+            return false;
         }
     }
 
-  // This function runs INSIDE the YouTube page
-  function scrapeYouTubeHomePage() {
-    console.log('🔍 Starting to scrape YouTube page...');
-    
-    const videos = [];
-    
-    // Different selectors for different YouTube layouts
-    const selectors = [
-      'ytd-rich-item-renderer #video-title-link',     // Main homepage
-      'ytd-video-renderer #video-title',              // Search/subscriptions page
-      '#contents ytd-rich-item-renderer a#video-title-link', // Alternative layout
-      'a[href*="/watch?v="]'                          // Fallback: any video link
-    ];
-    
-    for (const selector of selectors) {
-      console.log(`Trying selector: ${selector}`);
-      const videoElements = document.querySelectorAll(selector);
-      console.log(`Found ${videoElements.length} elements`);
-      
-      if (videoElements.length > 0) {
-        videoElements.forEach((element, index) => {
-          try {
-            const title = element.getAttribute('title') || 
-                         element.getAttribute('aria-label') ||
-                         element.textContent?.trim() ||
-                         'Unknown video';
+    function cleanYouTubeUrl(rawUrl) {
+        try {
+            const urlObj = new URL(rawUrl);
+            const videoId = urlObj.searchParams.get('v');
             
-            const url = element.href;
-            
-            // Try to get video duration from nearby elements
-            let duration = null;
-            let isLive = false;
-            const videoContainer = element.closest('ytd-rich-item-renderer, ytd-video-renderer');
-            if (videoContainer) {
-              const durationElement = videoContainer.querySelector('span.ytd-thumbnail-overlay-time-status-renderer, #text.ytd-thumbnail-overlay-time-status-renderer');
-              if (durationElement) {
-                const durationText = durationElement.textContent?.trim();
-                duration = durationText;
-                
-                // Check if it's a live stream
-                isLive = durationText === 'LIVE' || 
-                        durationText === 'EN DIRECT' || 
-                        durationText === 'DIRECT' ||
-                        durationText === 'LIVE NOW' ||
-                        videoContainer.querySelector('.badge-style-type-live-now, .ytd-thumbnail-overlay-toggle-button-renderer[aria-label*="live"], .ytd-thumbnail-overlay-toggle-button-renderer[aria-label*="LIVE"]') !== null;
-              }
-              
-              // Additional check for live indicators
-              if (!isLive) {
-                const liveIndicators = videoContainer.querySelectorAll('[aria-label*="live"], [aria-label*="LIVE"], .live-now, .badge-live');
-                isLive = liveIndicators.length > 0;
-              }
+            if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+                console.warn('Invalid video ID in URL:', rawUrl);
+                return rawUrl;
             }
             
-            if (title && url && url.includes('/watch?v=') && title !== 'Unknown video') {
-              videos.push({
-                title: title,
-                url: url,
-                duration: duration,
-                isLive: isLive,
-                timestamp: Date.now()
-              });
+            const cleanUrl = `https://www.youtube.com/watch?v=${videoId}`;
+            
+            if (rawUrl !== cleanUrl) {
+                console.log(`URL cleaned: removed timestamp parameters`);
             }
-          } catch (e) {
-            console.log(`Error parsing element ${index}:`, e);
-          }
-        });
-        
-        // Stop after finding videos with first working selector
-        if (videos.length > 0) {
-          console.log(`Success with selector: ${selector}`);
-          break;
+            
+            return cleanUrl;
+        } catch (error) {
+            console.error('Error cleaning URL:', error);
+            return rawUrl;
         }
-      }
-    }
-    
-    console.log(`Total videos found: ${videos.length}`);
-    console.log('Sample videos:', videos.slice(0, 3));
-    
-    return videos.slice(0, 50); // Limit to 50 videos for performance
-  }    // Helper functions
-    function showStatus(type, message) {
-        status.className = `status ${type}`;
-        status.textContent = message;
-        status.style.display = 'block';
     }
 
-    function sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
-    }
-
-    async function loadStats() {
-        const data = await chrome.storage.local.get(['videoCount', 'lastUsed']);
-        videoCount.textContent = data.videoCount || 0;
-        lastUsed.textContent = data.lastUsed ?
-            new Date(data.lastUsed).toLocaleDateString() : 'Never';
-    }
-
-    async function updateStats(foundVideosCount) {
-        const totalVideos = parseInt(videoCount.textContent) + 1;
-        const now = Date.now();
-
-        await chrome.storage.local.set({
-            videoCount: totalVideos,
-            lastUsed: now,
-            lastFoundCount: foundVideosCount
-        });
-
-        videoCount.textContent = totalVideos;
-        lastUsed.textContent = new Date(now).toLocaleDateString();
-    }
-
-    // Filter application function
-    async function applyFilters(videos) {
-        const settings = await chrome.storage.local.get(['filterShorts', 'minDuration', 'maxDuration', 'filterLiveStreams', 'filterRecentlyWatched', 'filterLowViews']);
+    function sanitizeVideoData(rawVideo) {
+        if (!rawVideo || typeof rawVideo !== 'object') return null;
         
-        let filteredVideos = [...videos];
-        
-        // Filter live streams
-        if (settings.filterLiveStreams) {
-            filteredVideos = filteredVideos.filter(video => !video.isLive);
-        }
-        
-        // Filter by duration
-        if (settings.filterShorts || settings.minDuration || settings.maxDuration) {
-            filteredVideos = filteredVideos.filter(video => {
-                if (!video.duration || video.isLive) return !video.isLive; // Skip live videos, keep others without duration info
-                
-                const durationInMinutes = parseDuration(video.duration);
-                if (durationInMinutes === null) return true; // Keep if we can't parse duration
-                
-                // Filter shorts (< 1 minute)
-                if (settings.filterShorts && durationInMinutes < 1) {
-                    return false;
-                }
-                
-                // Filter by minimum duration
-                if (settings.minDuration && durationInMinutes < settings.minDuration) {
-                    return false;
-                }
-                
-                // Filter by maximum duration
-                if (settings.maxDuration && durationInMinutes > settings.maxDuration) {
-                    return false;
-                }
-                
-                return true;
+        return {
+            title: (rawVideo.title || 'Unknown')
+                .replace(/[<>\"'&]/g, '')
+                .substring(0, 200)
+                .trim(),
+            url: isValidYouTubeUrl(rawVideo.url) ? rawVideo.url : null,
+            duration: typeof rawVideo.duration === 'string' ? 
+                      rawVideo.duration.replace(/[^0-9:]/g, '').substring(0, 10) : null,
+            isLive: Boolean(rawVideo.isLive),
+            timestamp: Date.now()
+        };
+    }
+
+    async function logSecurityEvent(event, details) {
+        try {
+            const logEntry = {
+                event,
+                details,
+                timestamp: Date.now(),
+                version: '1.0.1'
+            };
+            
+            const data = await chrome.storage.local.get(['securityLogs']);
+            const logs = data.securityLogs || [];
+            logs.push(logEntry);
+            
+            await chrome.storage.local.set({
+                securityLogs: logs.slice(-50)
             });
+        } catch (error) {
+            console.error('Error logging security event:', error);
         }
-        
-        console.log(`Filtered videos: ${filteredVideos.length} out of ${videos.length}`);
-        return filteredVideos;
     }
 
-    // Parse YouTube duration format (e.g., "10:30", "1:20:45", "0:45")
-    function parseDuration(durationString) {
-        if (!durationString) return null;
+    // YouTube Scraping Function (injected into YouTube page)
+    function scrapeYouTubeHomePageSecure() {
+        console.log('Starting secure YouTube scrape...');
         
-        const parts = durationString.split(':').map(part => parseInt(part, 10));
-        if (parts.some(isNaN)) return null;
+        const videos = [];
+        const MAX_VIDEOS = 50;
+        
+        // URL cleaning function (runs in YouTube context)
+        function cleanYouTubeUrl(rawUrl) {
+            try {
+                const urlObj = new URL(rawUrl);
+                const videoId = urlObj.searchParams.get('v');
+                if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+                    return rawUrl;
+                }
+                return `https://www.youtube.com/watch?v=${videoId}`;
+            } catch (error) {
+                return rawUrl;
+            }
+        }
+        
+        function getDurationFromElement(element) {
+            try {
+                const videoContainer = element.closest('ytd-rich-item-renderer, ytd-video-renderer');
+                if (!videoContainer) return null;
+                
+                const durationElement = videoContainer.querySelector(
+                    'span.ytd-thumbnail-overlay-time-status-renderer, #text.ytd-thumbnail-overlay-time-status-renderer'
+                );
+                
+                const durationText = durationElement?.textContent?.trim();
+                
+                console.log('Found duration text:', durationText);
+                
+                if (durationText && /^(\d+:)?(\d{1,2}:)?\d{1,2}$|^LIVE$|^EN DIRECT$/.test(durationText)) {
+                    return durationText;
+                }
+                
+                return null;
+            } catch {
+                return null;
+            }
+        }
+
+        function checkIfLiveStream(element) {
+            try {
+                const videoContainer = element.closest('ytd-rich-item-renderer, ytd-video-renderer');
+                if (!videoContainer) return false;
+                
+                const durationElement = videoContainer.querySelector(
+                    'span.ytd-thumbnail-overlay-time-status-renderer, #text.ytd-thumbnail-overlay-time-status-renderer'
+                );
+                const durationText = durationElement?.textContent?.trim();
+                
+                const isLiveByDuration = durationText && (
+                    durationText === 'LIVE' || 
+                    durationText === 'EN DIRECT' || 
+                    durationText === 'DIRECT' ||
+                    durationText === 'LIVE NOW'
+                );
+                
+                const liveIndicators = videoContainer.querySelectorAll(
+                    '[aria-label*="live"], [aria-label*="LIVE"], .live-now, .badge-live, .badge-style-type-live-now'
+                );
+                
+                return isLiveByDuration || liveIndicators.length > 0;
+            } catch {
+                return false;
+            }
+        }
+        
+        try {
+            const selectors = [
+                'ytd-rich-item-renderer #video-title-link',
+                'ytd-video-renderer #video-title',
+                '#contents ytd-rich-item-renderer a#video-title-link',
+                'a[href*="/watch?v="]'
+            ];
+            
+            for (const selector of selectors) {
+                const videoElements = document.querySelectorAll(selector);
+                console.log(`Selector "${selector}" found ${videoElements.length} elements`);
+                
+                if (videoElements.length > 0) {
+                    let processedCount = 0;
+                    
+                    videoElements.forEach((element, index) => {
+                        if (processedCount >= MAX_VIDEOS) return;
+                        
+                        try {
+                            const rawTitle = element.getAttribute('title') || 
+                                           element.getAttribute('aria-label') ||
+                                           element.textContent?.trim();
+                            
+                            const rawUrl = element.href;
+                            
+                            if (!rawTitle || !rawUrl) return;
+                            if (rawTitle.length > 200) return;
+                            if (!rawUrl.includes('/watch?v=')) return;
+                            
+                            // Validate URL format
+                            try {
+                                const testUrl = new URL(rawUrl);
+                                if (!['www.youtube.com', 'youtube.com', 'm.youtube.com'].includes(testUrl.hostname)) {
+                                    return;
+                                }
+                                const videoId = testUrl.searchParams.get('v');
+                                if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+                                    return;
+                                }
+                            } catch {
+                                return;
+                            }
+                            
+                            videos.push({
+                                title: rawTitle.replace(/[<>\"'&]/g, '').substring(0, 200),
+                                url: cleanYouTubeUrl(rawUrl), // Clean timestamps here
+                                duration: getDurationFromElement(element),
+                                isLive: checkIfLiveStream(element),
+                                timestamp: Date.now()
+                            });
+                            
+                            processedCount++;
+                            
+                        } catch (error) {
+                            console.warn(`Error processing element ${index}:`, error.message);
+                        }
+                    });
+                    
+                    if (videos.length > 0) break;
+                }
+            }
+            
+        } catch (error) {
+            console.error('Critical error in scraping:', error);
+            return [];
+        }
+        
+        console.log(`Secure scraping complete: ${videos.length} validated videos`);
+        return videos;
+    }
+
+    // Main Random Video Function
+    async function getRandomVideoSecure() {
+        const MAX_RETRIES = 3;
+        let retryCount = 0;
+        
+        while (retryCount < MAX_RETRIES) {
+            try {
+                showStatus('loading', 'Securely looking for videos...');
+                randomBtn.disabled = true;
+                
+                await logSecurityEvent('random_video_attempt', {
+                    attempt: retryCount + 1,
+                    maxRetries: MAX_RETRIES
+                });
+
+                const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+                
+                if (!tab || !tab.url) {
+                    throw new Error('Invalid tab detected');
+                }
+                
+                // Navigate to YouTube if necessary
+                if (!tab.url.includes('youtube.com')) {
+                    showStatus('loading', 'Navigating to YouTube...');
+                    await chrome.tabs.update(tab.id, { 
+                        url: 'https://www.youtube.com'
+                    });
+                    await sleep(3000);
+                }
+
+                // Scrape videos
+                showStatus('loading', 'Analyzing videos with filters...');
+                
+                const results = await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    func: scrapeYouTubeHomePageSecure,
+                });
+
+                const rawVideos = results[0]?.result || [];
+                
+                if (rawVideos.length === 0) {
+                    if (retryCount < MAX_RETRIES - 1) {
+                        retryCount++;
+                        console.log(`No videos found, retrying... (${retryCount}/${MAX_RETRIES})`);
+                        await sleep(2000);
+                        continue;
+                    } else {
+                        throw new Error('No videos found after multiple attempts');
+                    }
+                }
+
+                // Validate scraped videos
+                const validVideos = rawVideos.filter(video => {
+                    const sanitized = sanitizeVideoData(video);
+                    return sanitized && sanitized.url && isValidYouTubeUrl(sanitized.url);
+                });
+                
+                if (validVideos.length === 0) {
+                    throw new Error('No valid video URLs found');
+                }
+
+                console.log(`Security validation: ${validVideos.length}/${rawVideos.length} videos approved`);
+
+                // Apply user filters
+                const filteredVideos = await applyFilters(validVideos);
+                
+                if (filteredVideos.length === 0) {
+                    throw new Error('No videos match your filters');
+                }
+
+                // Smart video selection (avoid recent)
+                const videosToChooseFrom = await selectVideosPool(filteredVideos);
+
+                if (videosToChooseFrom.length === 0) {
+                    throw new Error('No videos available for selection');
+                }
+
+                // Select random video
+                const selectedVideo = videosToChooseFrom[Math.floor(Math.random() * videosToChooseFrom.length)];
+                
+                if (!isValidYouTubeUrl(selectedVideo.url)) {
+                    throw new Error('Selected video URL failed final security check');
+                }
+                
+                showStatus('loading', `Opening: ${selectedVideo.title.substring(0, 30)}...`);
+                
+                await logSecurityEvent('video_selected', {
+                    title: selectedVideo.title.substring(0, 50),
+                    hasValidUrl: isValidYouTubeUrl(selectedVideo.url),
+                    filtersApplied: true
+                });
+                
+                // Navigate to clean URL
+                const finalUrl = cleanYouTubeUrl(selectedVideo.url);
+                await chrome.tabs.update(tab.id, { url: finalUrl });
+                
+                // Update stats and save
+                await saveRecentVideoSecure(selectedVideo);
+                await updateStats(filteredVideos.length);
+                
+                showStatus('success', 'Perfect video found!');
+                setTimeout(() => window.close(), 1500);
+                
+                break;
+                
+            } catch (error) {
+                console.error(`Security error (attempt ${retryCount + 1}):`, error);
+                
+                await logSecurityEvent('security_error', {
+                    attempt: retryCount + 1,
+                    error: error.message,
+                    stack: error.stack?.substring(0, 200)
+                });
+                
+                if (retryCount < MAX_RETRIES - 1) {
+                    retryCount++;
+                    showStatus('loading', `Retrying... (${retryCount}/${MAX_RETRIES})`);
+                    await sleep(1000);
+                } else {
+                    showStatus('error', `Error: ${error.message}`);
+                    break;
+                }
+            } finally {
+                randomBtn.disabled = false;
+            }
+        }
+    }
+
+    // Video Selection Logic
+    async function selectVideosPool(filteredVideos) {
+        const recentVideos = await getRecentVideos();
+        let availableVideos = filteredVideos.filter(video => 
+            !recentVideos.some(recent => recent.url === video.url)
+        );
+
+        if (availableVideos.length >= 2) {
+            console.log(`Using ${availableVideos.length} fresh videos`);
+            return availableVideos;
+        } else {
+            // Avoid only the very last video
+            const lastVideo = recentVideos[0];
+            const videosExceptLast = filteredVideos.filter(video => 
+                !lastVideo || video.url !== lastVideo.url
+            );
+            console.log(`Using all videos except the very last one`);
+            return videosExceptLast.length > 0 ? videosExceptLast : filteredVideos;
+        }
+    }
+
+    // Filter Application
+    async function applyFilters(videos) {
+        try {
+            const settings = await chrome.storage.local.get([
+                'filterShorts', 'minDuration', 'maxDuration', 
+                'filterLiveStreams', 'filterRecentlyWatched', 'filterLowViews'
+            ]);
+            
+            console.log('Applying filters with settings:', settings);
+            console.log('Total videos before filtering:', videos.length);
+            
+            let filteredVideos = [...videos];
+            let filterSteps = [];
+            
+            // Filter live streams
+            if (settings.filterLiveStreams) {
+                const beforeCount = filteredVideos.length;
+                filteredVideos = filteredVideos.filter(video => !video.isLive);
+                const afterCount = filteredVideos.length;
+                filterSteps.push(`Live streams: ${beforeCount} → ${afterCount} (removed ${beforeCount - afterCount})`);
+            }
+            
+            // Filter by duration
+            if (settings.filterShorts || settings.minDuration || settings.maxDuration) {
+                const beforeCount = filteredVideos.length;
+                
+                filteredVideos = filteredVideos.filter(video => {
+                    // Skip live videos (already filtered above)
+                    if (video.isLive) return false;
+                    
+                    // If no duration info, keep the video
+                    if (!video.duration) {
+                        console.log('Video has no duration, keeping:', video.title.substring(0, 30));
+                        return true;
+                    }
+                    
+                    const durationInMinutes = parseDuration(video.duration);
+                    if (durationInMinutes === null) {
+                        console.log('Could not parse duration, keeping:', video.duration, video.title.substring(0, 30));
+                        return true;
+                    }
+                    
+                    console.log(`Video "${video.title.substring(0, 30)}" duration: ${durationInMinutes} minutes`);
+                    
+                    // Filter shorts (< 1 minute)
+                    if (settings.filterShorts && durationInMinutes < 1) {
+                        console.log('Filtering out short video:', video.title.substring(0, 30));
+                        return false;
+                    }
+                    
+                    // Filter by minimum duration
+                    if (settings.minDuration && durationInMinutes < settings.minDuration) {
+                        console.log(`Filtering out video too short (${durationInMinutes} < ${settings.minDuration}):`, video.title.substring(0, 30));
+                        return false;
+                    }
+                    
+                    // Filter by maximum duration
+                    if (settings.maxDuration && durationInMinutes > settings.maxDuration) {
+                        console.log(`Filtering out video too long (${durationInMinutes} > ${settings.maxDuration}):`, video.title.substring(0, 30));
+                        return false;
+                    }
+                    
+                    return true;
+                });
+                
+                const afterCount = filteredVideos.length;
+                filterSteps.push(`Duration filters: ${beforeCount} → ${afterCount} (removed ${beforeCount - afterCount})`);
+            }
+            
+            console.log('Filter steps:', filterSteps);
+            console.log(`Final result: ${filteredVideos.length}/${videos.length} videos approved`);
+            
+            return filteredVideos;
+        } catch (error) {
+            console.error('Error applying filters:', error);
+            return videos;
+        }
+    }
+
+    function parseDuration(durationString) {
+        if (!durationString || typeof durationString !== 'string') return null;
+        
+        const cleanDuration = durationString.replace(/[^0-9:]/g, '');
+        const parts = cleanDuration.split(':').map(part => parseInt(part, 10));
+        
+        if (parts.some(isNaN) || parts.length === 0) return null;
         
         let minutes = 0;
         if (parts.length === 2) {
-            // Format: MM:SS
-            minutes = parts[0] + parts[1] / 60;
+            minutes = Math.max(0, parts[0]) + Math.max(0, parts[1]) / 60;
         } else if (parts.length === 3) {
-            // Format: HH:MM:SS
-            minutes = parts[0] * 60 + parts[1] + parts[2] / 60;
+            minutes = Math.max(0, parts[0]) * 60 + Math.max(0, parts[1]) + Math.max(0, parts[2]) / 60;
         } else {
             return null;
         }
         
-        return minutes;
+        return Math.min(minutes, 1000);
     }
 
-    // Load settings from storage
-    async function loadSettings() {
-        const settings = await chrome.storage.local.get([
-            'filterShorts', 
-            'minDuration', 
-            'maxDuration', 
-            'filterLiveStreams',
-            'filterRecentlyWatched', 
-            'filterLowViews'
-        ]);
-        
-        document.getElementById('filterShorts').checked = settings.filterShorts || false;
-        document.getElementById('minDuration').value = settings.minDuration || '';
-        document.getElementById('maxDuration').value = settings.maxDuration || '';
-        document.getElementById('filterLiveStreams').checked = settings.filterLiveStreams || false;
-        document.getElementById('filterRecentlyWatched').checked = settings.filterRecentlyWatched || false;
-        document.getElementById('filterLowViews').checked = settings.filterLowViews || false;
-    }
-
-    // Save settings to storage
-    async function saveSettingsData() {
-        const settings = {
-            filterShorts: document.getElementById('filterShorts').checked,
-            minDuration: parseInt(document.getElementById('minDuration').value) || null,
-            maxDuration: parseInt(document.getElementById('maxDuration').value) || null,
-            filterLiveStreams: document.getElementById('filterLiveStreams').checked,
-            filterRecentlyWatched: document.getElementById('filterRecentlyWatched').checked,
-            filterLowViews: document.getElementById('filterLowViews').checked
-        };
-        
-        await chrome.storage.local.set(settings);
-    }
-
-    // Get recently watched videos to avoid repeats
+    // Storage Functions
     async function getRecentVideos() {
-        const data = await chrome.storage.local.get(['recentVideos']);
-        const recentVideos = data.recentVideos || [];
-        
-        // Remove videos older than 1 hour to keep the list fresh
-        const oneHourAgo = Date.now() - (60 * 60 * 1000);
-        return recentVideos.filter(video => video.timestamp > oneHourAgo);
+        try {
+            const data = await chrome.storage.local.get(['recentVideos']);
+            const recentVideos = data.recentVideos || [];
+            
+            // 15 minutes cooldown instead of 1 hour
+            const fifteenMinutesAgo = Date.now() - (15 * 60 * 1000);
+            
+            const validRecent = recentVideos
+                .filter(video => video && video.timestamp > fifteenMinutesAgo && isValidYouTubeUrl(video.url))
+                .slice(0, 10);
+                
+            console.log(`Anti-repeat: avoiding ${validRecent.length} recent videos`);
+            return validRecent;
+        } catch (error) {
+            console.error('Error getting recent videos:', error);
+            return [];
+        }
     }
 
-    // Save a video to the recent list
-    async function saveRecentVideo(video) {
-        const recentVideos = await getRecentVideos();
-        
-        // Add current video to the beginning of the list
-        recentVideos.unshift({
-            url: video.url,
-            title: video.title,
-            timestamp: Date.now()
-        });
-        
-        // Keep only the last 20 videos to avoid too much storage
-        const limitedRecent = recentVideos.slice(0, 20);
-        
-        await chrome.storage.local.set({ recentVideos: limitedRecent });
+    async function saveRecentVideoSecure(video) {
+        try {
+            if (!video || !video.url || !isValidYouTubeUrl(video.url)) {
+                console.warn('Attempted to save invalid video, skipping');
+                await logSecurityEvent('invalid_save_attempt', {
+                    hasVideo: !!video,
+                    hasUrl: !!video?.url,
+                    isValidUrl: video?.url ? isValidYouTubeUrl(video.url) : false
+                });
+                return;
+            }
+            
+            const recentVideos = await getRecentVideos();
+            
+            const secureVideoData = {
+                url: video.url,
+                title: (video.title || 'Unknown').substring(0, 100),
+                timestamp: Date.now()
+            };
+            
+            recentVideos.unshift(secureVideoData);
+            const limitedRecent = recentVideos.slice(0, 20);
+            
+            await chrome.storage.local.set({ recentVideos: limitedRecent });
+            
+        } catch (error) {
+            console.error('Error in secure video save:', error);
+            await logSecurityEvent('save_error', { error: error.message });
+        }
     }
+
+    // Settings Functions
+    async function loadSettings() {
+        try {
+            const settings = await chrome.storage.local.get([
+                'filterShorts', 'minDuration', 'maxDuration', 
+                'filterLiveStreams', 'filterRecentlyWatched', 'filterLowViews'
+            ]);
+            
+            console.log('Loading settings:', settings);
+            
+            const elements = {
+                filterShorts: document.getElementById('filterShorts'),
+                minDuration: document.getElementById('minDuration'),
+                maxDuration: document.getElementById('maxDuration'),
+                filterLiveStreams: document.getElementById('filterLiveStreams'),
+                filterRecentlyWatched: document.getElementById('filterRecentlyWatched'),
+                filterLowViews: document.getElementById('filterLowViews')
+            };
+            
+            // Debug: check if elements exist
+            Object.keys(elements).forEach(key => {
+                if (!elements[key]) {
+                    console.error(`Element not found: ${key}`);
+                } else {
+                    console.log(`Element found: ${key}`);
+                }
+            });
+            
+            if (elements.filterShorts) elements.filterShorts.checked = settings.filterShorts || false;
+            if (elements.minDuration) elements.minDuration.value = settings.minDuration || '';
+            if (elements.maxDuration) elements.maxDuration.value = settings.maxDuration || '';
+            if (elements.filterLiveStreams) elements.filterLiveStreams.checked = settings.filterLiveStreams || false;
+            if (elements.filterRecentlyWatched) elements.filterRecentlyWatched.checked = settings.filterRecentlyWatched || false;
+            if (elements.filterLowViews) elements.filterLowViews.checked = settings.filterLowViews || false;
+            
+            console.log('Settings loaded successfully');
+        } catch (error) {
+            console.error('Error loading settings:', error);
+        }
+    }
+
+    async function saveSettingsData() {
+        try {
+            const elements = {
+                filterShorts: document.getElementById('filterShorts'),
+                minDuration: document.getElementById('minDuration'),
+                maxDuration: document.getElementById('maxDuration'),
+                filterLiveStreams: document.getElementById('filterLiveStreams'),
+                filterRecentlyWatched: document.getElementById('filterRecentlyWatched'),
+                filterLowViews: document.getElementById('filterLowViews')
+            };
+            
+            const settings = {
+                filterShorts: elements.filterShorts?.checked || false,
+                minDuration: parseInt(elements.minDuration?.value) || null,
+                maxDuration: parseInt(elements.maxDuration?.value) || null,
+                filterLiveStreams: elements.filterLiveStreams?.checked || false,
+                filterRecentlyWatched: elements.filterRecentlyWatched?.checked || false,
+                filterLowViews: elements.filterLowViews?.checked || false
+            };
+            
+            // Validation: min can't be > max
+            if (settings.minDuration && settings.maxDuration && settings.minDuration > settings.maxDuration) {
+                settings.minDuration = settings.maxDuration;
+                if (elements.minDuration) elements.minDuration.value = settings.minDuration;
+            }
+            
+            console.log('Saving settings:', settings);
+            await chrome.storage.local.set(settings);
+            await logSecurityEvent('settings_saved', { settingsKeys: Object.keys(settings) });
+            
+            console.log('Settings saved successfully');
+        } catch (error) {
+            console.error('Error saving settings:', error);
+        }
+    }
+
+    // UI Helper Functions
+    function showStatus(type, message) {
+        if (!status) return;
+        
+        const cleanMessage = String(message).substring(0, 200);
+        
+        status.className = `status ${type}`;
+        status.textContent = cleanMessage;
+        status.style.display = 'block';
+    }
+
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, Math.min(ms, 10000)));
+    }
+
+    async function loadStats() {
+        try {
+            const data = await chrome.storage.local.get(['videoCount', 'lastUsed']);
+            if (videoCount) videoCount.textContent = Math.max(0, parseInt(data.videoCount) || 0);
+            if (lastUsed) {
+                lastUsed.textContent = data.lastUsed ? 
+                    new Date(data.lastUsed).toLocaleDateString() : 'Never';
+            }
+        } catch (error) {
+            console.error('Error loading stats:', error);
+        }
+    }
+
+    async function updateStats(foundVideosCount) {
+        try {
+            const currentCount = Math.max(0, parseInt(videoCount?.textContent) || 0);
+            const totalVideos = currentCount + 1;
+            const now = Date.now();
+
+            await chrome.storage.local.set({
+                videoCount: totalVideos,
+                lastUsed: now,
+                lastFoundCount: Math.max(0, foundVideosCount || 0)
+            });
+
+            if (videoCount) videoCount.textContent = totalVideos;
+            if (lastUsed) lastUsed.textContent = new Date(now).toLocaleDateString();
+        } catch (error) {
+            console.error('Error updating stats:', error);
+        }
+    }
+
+    // Event Listeners Setup
+    async function initializeExtension() {
+        try {
+            await loadStats();
+            await loadSettings();
+            
+            // Main button
+            if (randomBtn) {
+                randomBtn.addEventListener('click', getRandomVideoSecure);
+            }
+
+            // Settings panel
+            if (settingsBtn && settingsPanel) {
+                settingsBtn.addEventListener('click', () => {
+                    const isHidden = settingsPanel.style.display === 'none' || !settingsPanel.style.display;
+                    settingsPanel.style.display = isHidden ? 'block' : 'none';
+                    settingsBtn.textContent = isHidden ? 'Hide Filters' : 'Filters';
+                });
+            }
+
+            // Save settings
+            if (saveSettings) {
+                saveSettings.addEventListener('click', async () => {
+                    await saveSettingsData();
+                    if (settingsPanel) settingsPanel.style.display = 'none';
+                    if (settingsBtn) settingsBtn.textContent = 'Filters';
+                    showStatus('success', 'Settings saved!');
+                    setTimeout(() => {
+                        if (status) status.style.display = 'none';
+                    }, 2000);
+                });
+            }
+
+            // Cancel settings
+            if (cancelSettings) {
+                cancelSettings.addEventListener('click', () => {
+                    loadSettings();
+                    if (settingsPanel) settingsPanel.style.display = 'none';
+                    if (settingsBtn) settingsBtn.textContent = 'Filters';
+                });
+            }
+            
+            await logSecurityEvent('popup_initialized', { version: '1.0.1' });
+            
+        } catch (error) {
+            console.error('Critical initialization error:', error);
+            await logSecurityEvent('initialization_error', { error: error.message });
+        }
+    }
+
+    // Initialize the extension
+    await initializeExtension();
 });

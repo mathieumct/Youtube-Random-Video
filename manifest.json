@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
     "name": "YouTube Random Video",
-    "version": "1.0.0",
-    "description": "Randomly pick a video from your YouTube feed",
+    "version": "1.0.1",
+    "description": "Randomly pick a video from your YouTube feed with smart filters",
     "permissions": [
         "activeTab",
         "storage",
@@ -24,6 +24,15 @@
                 "content.js"
             ],
             "run_at": "document_idle"
+        }
+    ],
+    "content_security_policy": {
+        "extension_pages": "script-src 'self'; object-src 'self'; img-src 'self' data: https://i.ytimg.com https://yt3.ggpht.com; style-src 'self' 'unsafe-inline'; connect-src 'self'"
+    },
+    "web_accessible_resources": [
+        {
+            "resources": ["popup.html"],
+            "matches": ["*://*.youtube.com/*"]
         }
     ]
 }
